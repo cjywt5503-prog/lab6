@@ -1,0 +1,13 @@
+global:
+  resolve_timeout: 2m
+route:
+  receiver: n8n
+  group_by: ['alertname', 'instance']
+  group_wait: 5s
+  group_interval: 10s
+  repeat_interval: 2m
+receivers:
+  - name: n8n
+    webhook_configs:
+      - url: 'http://n8n:5678/webhook/biolims-alerts'
+        send_resolved: true

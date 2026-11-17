@@ -1,0 +1,307 @@
+name: biolims_lab6
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.1.5
+    command:
+    - start-dev
+    - --import-realm
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin-demo-123
+      KC_HOSTNAME: http://localhost:8180
+    ports:
+    - 127.0.0.1:8180:8080
+    volumes:
+    - ./keycloak/biolims-realm.json:/opt/keycloak/data/import/biolims-realm.json:ro
+    networks:
+    - biolims-net
+  consul:
+    image: hashicorp/consul:1.15
+    ports:
+    - 127.0.0.1:8500:8500
+    command: agent -server -bootstrap-expect=1 -ui -client=0.0.0.0
+    healthcheck:
+      test:
+      - CMD
+      - consul
+      - members
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+    - biolims-net
+  rabbitmq:
+    image: rabbitmq:3.13.7-management-alpine
+    hostname: rabbitmq
+    restart: unless-stopped
+    ports:
+    - 127.0.0.1:5672:5672
+    - 127.0.0.1:15672:15672
+    environment:
+      RABBITMQ_DEFAULT_USER: biolims
+      RABBITMQ_DEFAULT_PASS: biolims_demo
+    volumes:
+    - rabbitmq-data-v2:/var/lib/rabbitmq
+    healthcheck:
+      test:
+      - CMD
+      - rabbitmq-diagnostics
+      - -q
+      - check_running
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+    - biolims-net
+  order-sample-service:
+    build:
+      context: .
+      dockerfile: order-sample-service/Dockerfile
+    restart: unless-stopped
+    expose:
+    - '8001'
+    environment:
+      SERVICE_NAME: order-sample-service
+      SERVICE_PORT: '8001'
+      CONSUL_HOST: consul
+    depends_on:
+      consul:
+        condition: service_healthy
+    healthcheck:
+      test:
+      - CMD
+      - python
+      - -c
+      - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=2)
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+    - biolims-net
+  assay-execution-service:
+    build:
+      context: .
+      dockerfile: assay-execution-service/Dockerfile
+    restart: unless-stopped
+    stop_grace_period: 50s
+    expose:
+    - '8002'
+    environment:
+      SERVICE_NAME: assay-execution-service
+      SERVICE_PORT: '8002'
+      CONSUL_HOST: consul
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USER: biolims
+      RABBITMQ_PASSWORD: biolims_demo
+      ASSAY_DB_PATH: /data/assay_v2.sqlite3
+    volumes:
+    - assay-data-v2:/data
+    depends_on:
+      consul:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      order-sample-service:
+        condition: service_healthy
+    healthcheck:
+      test:
+      - CMD
+      - python
+      - -c
+      - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/health', timeout=2)
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+    - biolims-net
+  validation-report-service:
+    build:
+      context: .
+      dockerfile: validation-report-service/Dockerfile
+    restart: unless-stopped
+    stop_grace_period: 40s
+    expose:
+    - '8003'
+    environment:
+      SERVICE_NAME: validation-report-service
+      SERVICE_PORT: '8003'
+      CONSUL_HOST: consul
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USER: biolims
+      RABBITMQ_PASSWORD: biolims_demo
+      REPORT_DB_PATH: /data/report_v2.sqlite3
+    volumes:
+    - report-data-v2:/data
+    depends_on:
+      consul:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test:
+      - CMD
+      - python
+      - -c
+      - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8003/health', timeout=2)
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+    - biolims-net
+  api-gateway:
+    image: nginx:alpine
+    restart: unless-stopped
+    ports:
+    - 127.0.0.1:8080:8080
+    volumes:
+    - ./api-gateway/nginx.conf:/etc/nginx/nginx.conf:ro
+    - ./web:/usr/share/nginx/html:ro
+    depends_on:
+      order-sample-service:
+        condition: service_healthy
+      assay-execution-service:
+        condition: service_healthy
+      validation-report-service:
+        condition: service_healthy
+    networks:
+    - biolims-net
+  shard-0-primary:
+    build:
+      context: .
+      dockerfile: shard-service/Dockerfile
+    restart: unless-stopped
+    expose:
+    - '8004'
+    environment:
+      SERVICE_NAME: shard-0-primary
+      SHARD_ID: '0'
+      SHARD_ROLE: primary
+      REPLICA_URL: http://shard-0-replica:8004
+    volumes:
+    - shard-0-primary-data:/data
+    networks:
+    - biolims-net
+  shard-0-replica:
+    build:
+      context: .
+      dockerfile: shard-service/Dockerfile
+    restart: unless-stopped
+    expose:
+    - '8004'
+    environment:
+      SERVICE_NAME: shard-0-replica
+      SHARD_ID: '0'
+      SHARD_ROLE: replica
+    volumes:
+    - shard-0-replica-data:/data
+    networks:
+    - biolims-net
+  shard-1-primary:
+    build:
+      context: .
+      dockerfile: shard-service/Dockerfile
+    restart: unless-stopped
+    expose:
+    - '8004'
+    environment:
+      SERVICE_NAME: shard-1-primary
+      SHARD_ID: '1'
+      SHARD_ROLE: primary
+      REPLICA_URL: http://shard-1-replica:8004
+    volumes:
+    - shard-1-primary-data:/data
+    networks:
+    - biolims-net
+  shard-1-replica:
+    build:
+      context: .
+      dockerfile: shard-service/Dockerfile
+    restart: unless-stopped
+    expose:
+    - '8004'
+    environment:
+      SERVICE_NAME: shard-1-replica
+      SHARD_ID: '1'
+      SHARD_ROLE: replica
+    volumes:
+    - shard-1-replica-data:/data
+    networks:
+    - biolims-net
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    restart: unless-stopped
+    ports:
+    - 127.0.0.1:9090:9090
+    volumes:
+    - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
+    networks:
+    - biolims-net
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    restart: unless-stopped
+    ports:
+    - 127.0.0.1:9093:9093
+    volumes:
+    - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    networks:
+    - biolims-net
+  grafana:
+    image: grafana/grafana:11.3.1
+    restart: unless-stopped
+    ports:
+    - 127.0.0.1:3000:3000
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin-lab6-demo
+      GF_USERS_ALLOW_SIGN_UP: 'false'
+    volumes:
+    - grafana-data:/var/lib/grafana
+    - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+    - prometheus
+    networks:
+    - biolims-net
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:1.76.1
+    restart: unless-stopped
+    ports:
+    - 127.0.0.1:5678:5678
+    environment:
+      N8N_HOST: localhost
+      N8N_PORT: '5678'
+      N8N_PROTOCOL: http
+      WEBHOOK_URL: http://localhost:5678/
+      N8N_SECURE_COOKIE: 'false'
+      GENERIC_TIMEZONE: Europe/Kyiv
+    volumes:
+    - n8n-data:/home/node/.n8n
+    networks:
+    - biolims-net
+  incident-service:
+    build:
+      context: .
+      dockerfile: incident-service/Dockerfile
+    restart: unless-stopped
+    ports:
+    - 127.0.0.1:8005:8005
+    volumes:
+    - incident-data:/data
+    networks:
+    - biolims-net
+networks:
+  biolims-net:
+    driver: bridge
+volumes:
+  order-data-v2: null
+  assay-data-v2: null
+  report-data-v2: null
+  rabbitmq-data-v2: null
+  shard-0-primary-data: null
+  shard-0-replica-data: null
+  shard-1-primary-data: null
+  shard-1-replica-data: null
+  grafana-data: null
+  n8n-data: null
+  incident-data: null

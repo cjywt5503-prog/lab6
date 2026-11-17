@@ -1,0 +1,24 @@
+groups:
+  - name: biolims-critical
+    rules:
+      - alert: BioLIMSNodeDown
+        expr: up{job=~"order-coordinator|shard-primary|shard-replica"} == 0
+        for: 20s
+        labels: {severity: critical}
+        annotations:
+          summary: 'Вузол {{ $labels.instance }} недоступний'
+          description: 'Prometheus не може отримати метрики вузла протягом 20 секунд.'
+      - alert: BioLIMSHighLatencyP99
+        expr: histogram_quantile(0.99, sum by (service, le) (rate(biolims_http_request_duration_seconds_bucket[2m]))) > 0.5
+        for: 15s
+        labels: {severity: warning}
+        annotations:
+          summary: 'Висока затримка p99 у {{ $labels.service }}'
+          description: 'Оцінка p99 більша за 0,5 секунди.'
+      - alert: BioLIMSReplicationLag
+        expr: biolims_replication_lag_seconds{role="primary"} > 10
+        for: 10s
+        labels: {severity: warning}
+        annotations:
+          summary: 'Затримка реплікації шарда {{ $labels.shard }}'
+          description: 'Найстаріший запис очікує реплікації більше 10 секунд.'

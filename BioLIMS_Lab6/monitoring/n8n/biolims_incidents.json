@@ -1,0 +1,82 @@
+{
+  "name": "BioLIMS — Alertmanager до журналу інцидентів",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "biolims-alerts",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "c80891a5-6d05-4c0f-ab93-93d98607bc01",
+      "name": "Alertmanager webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "ea19704b-c357-4a82-b7c7-5542d8000001"
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $json.body ?? $json;\nconst alerts = Array.isArray(data.alerts) ? data.alerts : [];\nreturn alerts.map(a => ({json: {\n  fingerprint: a.fingerprint,\n  alertname: a.labels?.alertname ?? 'UnknownAlert',\n  severity: a.labels?.severity ?? 'warning',\n  target: a.labels?.instance ?? a.labels?.service ?? 'unknown',\n  summary: a.annotations?.summary ?? '',\n  status: a.status ?? data.status ?? 'firing'\n}}));"
+      },
+      "id": "c80891a5-6d05-4c0f-ab93-93d98607bc02",
+      "name": "Підготувати інциденти",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        250,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://incident-service:8005/incidents",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "c80891a5-6d05-4c0f-ab93-93d98607bc03",
+      "name": "Створити або оновити інцидент",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        500,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Alertmanager webhook": {
+      "main": [
+        [
+          {
+            "node": "Підготувати інциденти",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Підготувати інциденти": {
+      "main": [
+        [
+          {
+            "node": "Створити або оновити інцидент",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "pinData": {}
+}
